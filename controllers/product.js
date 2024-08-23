@@ -15,6 +15,7 @@ exports.getProducts = async (req, res) => {
     res.json({ err: "Getting all products failed." + error.message });
   }
 };
+
 exports.updateProduct = async (req, res) => {
   const estoreid = req.headers.estoreid;
   const prodid = req.body.prodid;

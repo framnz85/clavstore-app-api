@@ -47,7 +47,6 @@ exports.getUserDetails = async (req, res) => {
   const email = req.user.email;
   const estoreid = req.headers.estoreid;
   const resellid = req.params.resellid;
-  console.log(email);
 
   try {
     const user = await User.findOne({
