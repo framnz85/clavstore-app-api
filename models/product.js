@@ -35,6 +35,23 @@ const productSchema = new mongoose.Schema(
       type: Number,
       trim: true,
       maxlength: 32,
+      default: 0,
+    },
+    markupType: {
+      type: String,
+      enum: ["percent", "number"],
+      default: "percent",
+    },
+    discount: {
+      type: Number,
+      trim: true,
+      maxlength: 32,
+      default: 0,
+    },
+    discounttype: {
+      type: String,
+      enum: ["percent", "number"],
+      default: "percent",
     },
     price: {
       type: Number,

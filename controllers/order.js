@@ -4,6 +4,11 @@ const Order = require("../models/order");
 const User = require("../models/user");
 const Estore = require("../models/estore");
 const Product = require("../models/product");
+const {
+  createRaffle,
+  checkOrderedProd,
+  updateOrderedProd,
+} = require("./common");
 
 exports.getPosOrders = async (req, res) => {
   const estoreid = req.headers.estoreid;
@@ -31,10 +36,108 @@ exports.getPosOrders = async (req, res) => {
   }
 };
 
+exports.updateCart = async (req, res) => {
+  const { cart } = req.body;
+  const estoreid = req.headers.estoreid;
+  const email = req.user.email;
+  let products = [];
+
+  try {
+    const user = await User.findOne({ email }).exec();
+    if (user) {
+      let showWaiting = false;
+      let remainingQuantity = 0;
+      let waitingProduct = { title: "", quantity: 0 };
+      for (let i = 0; i < cart.length; i++) {
+        let object = {};
+
+        object.product = cart[i].product;
+        object.count = cart[i].count;
+        object.excess = cart[i].excess ? true : false;
+
+        const productFromDb = await Product.findOne({
+          _id: new ObjectId(cart[i].product),
+          estoreid: new ObjectId(estoreid),
+        }).exec();
+        object.supplierPrice = cart[i].excess
+          ? cart[i].supplierPrice
+          : productFromDb.supplierPrice;
+        let price = 0;
+        if (cart[i].priceChange || cart[i].excess) {
+          price = cart[i].price;
+        } else {
+          if (
+            productFromDb.wprice &&
+            productFromDb.wprice > 0 &&
+            cart[i].count >= productFromDb.wcount
+          ) {
+            price = productFromDb.wprice;
+          } else {
+            price = productFromDb.price;
+          }
+        }
+        object.price = price;
+        cart[i] = { ...cart[i], price };
+
+        products.push(productFromDb);
+
+        remainingQuantity = productFromDb.quantity;
+
+        if (
+          !cart[i].excess &&
+          !productFromDb.segregate &&
+          (!productFromDb.quantity || productFromDb.quantity < object.count)
+        ) {
+          waitingProduct = {
+            ...productFromDb._doc,
+            excessCount:
+              parseFloat(object.count) - parseFloat(productFromDb.quantity),
+          };
+          showWaiting = true;
+        }
+
+        const newQuantity =
+          productFromDb &&
+          productFromDb.waiting &&
+          productFromDb.waiting.newQuantity
+            ? productFromDb.waiting.newQuantity
+            : 0;
+
+        if (cart[i].excess && newQuantity < object.count) {
+          waitingProduct = {
+            ...cart[i],
+            quantity: newQuantity,
+          };
+          showWaiting = false;
+        }
+      }
+      if (waitingProduct.quantity === 0 && remainingQuantity > 0) {
+        res.json({ cart, products });
+      } else {
+        res.json({
+          err:
+            waitingProduct.title +
+            " with price @ " +
+            waitingProduct.price +
+            " has " +
+            waitingProduct.quantity +
+            " in stock only",
+          waitingProduct: showWaiting ? waitingProduct : {},
+        });
+      }
+    } else {
+      res.json({ err: "Cannot fetch the cart details." });
+    }
+  } catch (error) {
+    res.json({ err: "Fetching cart fails. " + error.message });
+  }
+};
+
 exports.saveOrder = async (req, res) => {
   const estoreid = req.headers.estoreid;
   const email = req.user.email;
 
+  const orderStatus = req.body.orderStatus;
   const cartTotal = req.body.cartTotal;
   const discount = req.body.discount;
   const addDiscount = req.body.addDiscount;
@@ -84,108 +187,77 @@ exports.saveOrder = async (req, res) => {
       }
     }
 
-    const newOrder = new Order({
-      orderType: "pos",
-      orderStatus: "Completed",
-      cartTotal,
-      discount,
-      addDiscount,
-      cash,
-      createdBy: user._id,
-      orderedBy: checkUser && checkUser._id ? checkUser._id : user._id,
-      orderedName: customerName || user.name,
-      estoreid: new ObjectId(estoreid),
-      orderNotes,
-      products,
-    });
+    const checkProdQty = await checkOrderedProd(products, estoreid);
 
-    const order = await newOrder.save();
-
-    if (order) {
-      let newProducts = [];
-      const orderProducts = order.products;
-
-      await Order.findByIdAndUpdate(order._id, {
-        orderCode: order._id.toString().slice(-12),
-      }).exec();
-
-      const estore = await Estore.findByIdAndUpdate(estoreid, {
-        orderChange: new Date().valueOf(),
-        productChange: new Date().valueOf(),
-      }).exec();
-
-      for (i = 0; i < orderProducts.length; i++) {
-        const result = await Product.findOneAndUpdate(
+    if (checkProdQty && checkProdQty.err) {
+      res.json({ err: checkProdQty.err, backToCart: true });
+    } else {
+      const newOrder = new Order({
+        orderType: "pos",
+        orderStatus,
+        statusHistory: [
           {
+            status: orderStatus,
+            remarks: "Order was created.",
+            date: new Date(),
+          },
+        ],
+        cartTotal,
+        discount,
+        addDiscount,
+        cash,
+        createdBy: user._id,
+        orderedBy: checkUser && checkUser._id ? checkUser._id : user._id,
+        orderedName: customerName || user.name,
+        estoreid: new ObjectId(estoreid),
+        orderNotes,
+        products,
+      });
+
+      const order = await newOrder.save();
+
+      if (order) {
+        let newProducts = [];
+
+        const updatedOrder = await Order.findOneAndUpdate(
+          {
+            _id: new ObjectId(order._id),
+            estoreid: new ObjectId(estoreid),
+          },
+          { orderCode: order._id.toString().slice(-12) },
+          { new: true }
+        );
+
+        await updateOrderedProd(order.products, estoreid, true);
+        createRaffle(estoreid, user, order);
+
+        const orderProducts = order.products;
+
+        for (i = 0; i < orderProducts.length; i++) {
+          const result = await Product.findOne({
             _id: new ObjectId(orderProducts[i].product),
             estoreid: Object(estoreid),
+          }).exec();
+          if (result && result._id) {
+            newProducts.push(result);
+          }
+        }
+
+        await Estore.findOneAndUpdate(
+          {
+            _id: new ObjectId(estoreid),
           },
           {
-            $inc: {
-              quantity: -orderProducts[i].count,
-              sold: orderProducts[i].count,
-            },
+            productChange: new Date().valueOf(),
+            orderChange: new Date().valueOf(),
           },
           { new: true }
         );
-        if (result && result._id) {
-          newProducts.push(result);
-        }
-        if (result && result.quantity <= 0) {
-          const newQuantity =
-            result && result.waiting && result.waiting.newQuantity
-              ? result.waiting.newQuantity
-              : 0;
 
-          const newSupplierPrice =
-            result && result.waiting && result.waiting.newSupplierPrice
-              ? result.waiting.newSupplierPrice
-              : result.supplierPrice;
-
-          const newPrice =
-            newSupplierPrice + (newSupplierPrice * result.markup) / 100;
-
-          await Product.findOneAndUpdate(
-            {
-              _id: new ObjectId(orderProducts[i].product),
-              estoreid: Object(estoreid),
-            },
-            {
-              quantity: newQuantity,
-              supplierPrice: newSupplierPrice,
-              price: newPrice,
-              waiting: {},
-            },
-            { new: true }
-          );
-
-          const date1 = new Date(estore.raffleDate);
-          const date2 = new Date();
-          const timeDifference = date1.getTime() - date2.getTime();
-          const daysDifference = Math.round(
-            timeDifference / (1000 * 3600 * 24)
-          );
-
-          if (
-            user.role === "customer" &&
-            estore.raffleActivation &&
-            daysDifference > 0
-          ) {
-            createRaffle(
-              estoreid,
-              user._id,
-              order._id,
-              estore.raffleDate,
-              estore.raffleEntryAmount,
-              order.cartTotal
-            );
-          }
-        }
+        res.json({ order: updatedOrder, newProducts });
+      } else {
+        res.json({ err: "Cannot save the order." });
       }
-
-      res.json({ order, newProducts });
-    } else {
-      res.json({ err: "Cannot save the order." });
     }
   } catch (error) {
     res.json({ err: "Saving cart to order fails. " + error.message });
@@ -196,6 +268,7 @@ exports.sendOrder = async (req, res) => {
   const estoreid = req.headers.estoreid;
   const email = req.user.email;
 
+  const orderStatus = req.body.orderStatus;
   const cartTotal = req.body.cartTotal;
   const discount = req.body.discount;
   const addDiscount = req.body.addDiscount;
@@ -247,7 +320,7 @@ exports.sendOrder = async (req, res) => {
 
     const newOrder = new Order({
       orderType: "pos",
-      orderStatus: "Completed",
+      orderStatus,
       cartTotal,
       discount,
       addDiscount,
@@ -276,5 +349,35 @@ exports.sendOrder = async (req, res) => {
     }
   } catch (error) {
     res.json({ err: "Saving cart to order fails. " + error.message });
+  }
+};
+
+exports.updateOrder = async (req, res) => {
+  const estoreid = req.headers.estoreid;
+
+  const orderid = req.body.orderid;
+  const orderStatus = req.body.orderStatus;
+
+  try {
+    const updatedOrder = await Order.findOneAndUpdate(
+      {
+        _id: new ObjectId(orderid),
+        estoreid: new ObjectId(estoreid),
+      },
+      { orderStatus },
+      { new: true }
+    );
+
+    await Estore.findOneAndUpdate(
+      {
+        _id: new ObjectId(estoreid),
+      },
+      { orderChange: new Date().valueOf() },
+      { new: true }
+    );
+
+    res.json(updatedOrder);
+  } catch (error) {
+    res.json({ err: "Updating order status fails. " + error.message });
   }
 };
