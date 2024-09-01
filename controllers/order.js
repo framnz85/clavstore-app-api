@@ -12,6 +12,8 @@ const {
 
 exports.getPosOrders = async (req, res) => {
   const estoreid = req.headers.estoreid;
+  const page = req.body.page;
+  const limit = req.body.page;
   const email = req.user.email;
   let orders = [];
 
@@ -22,7 +24,10 @@ exports.getPosOrders = async (req, res) => {
         estoreid: new ObjectId(estoreid),
         orderType: "pos",
         createdBy: user._id,
-      }).exec();
+      })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec();
     } else {
       orders = await Order.find({
         estoreid: new ObjectId(estoreid),

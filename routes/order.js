@@ -9,7 +9,7 @@ const {
 } = require("../controllers/order");
 const { authCheck, adminGratisCheck } = require("../middlewares/auth");
 
-router.get("/app/all-pos-orders", authCheck, adminGratisCheck, getPosOrders);
+router.post("/app/all-pos-orders", authCheck, adminGratisCheck, getPosOrders);
 router.post("/app/update-pos-cart", authCheck, adminGratisCheck, updateCart);
 router.post("/app/save-pos-orders", authCheck, adminGratisCheck, saveOrder);
 router.post("/app/send-pos-orders", authCheck, adminGratisCheck, sendOrder);

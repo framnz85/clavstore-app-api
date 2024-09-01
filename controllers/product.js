@@ -1,14 +1,45 @@
 const ObjectId = require("mongoose").Types.ObjectId;
 
+const Category = require("../models/category");
 const Product = require("../models/product");
+const Order = require("../models/order");
+const User = require("../models/user");
+
+exports.getAllCounts = async (req, res) => {
+  const estoreid = req.headers.estoreid;
+
+  try {
+    const categories = await Category.countDocuments({
+      estoreid: new ObjectId(estoreid),
+    }).exec();
+    const products = await Product.countDocuments({
+      estoreid: new ObjectId(estoreid),
+    }).exec();
+    const orders = await Order.countDocuments({
+      estoreid: new ObjectId(estoreid),
+    }).exec();
+    const users = await User.countDocuments({
+      estoreid: new ObjectId(estoreid),
+    }).exec();
+
+    res.json({ categories, products, orders, users });
+  } catch (error) {
+    res.json({ err: "Getting all counts failed." + error.message });
+  }
+};
 
 exports.getProducts = async (req, res) => {
   const estoreid = req.headers.estoreid;
+  const page = req.body.page;
+  const limit = req.body.page;
 
   try {
     const products = await Product.find({
       estoreid: new ObjectId(estoreid),
-    }).exec();
+    })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .exec();
 
     res.json(products);
   } catch (error) {

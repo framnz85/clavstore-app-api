@@ -6,11 +6,16 @@ const User = require("../models/user");
 
 exports.getUsers = async (req, res) => {
   const estoreid = req.headers.estoreid;
+  const page = req.body.page;
+  const limit = req.body.page;
 
   try {
     const users = await User.find({
       estoreid: new ObjectId(estoreid),
-    }).exec();
+    })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .exec();
 
     res.json(users);
   } catch (error) {
